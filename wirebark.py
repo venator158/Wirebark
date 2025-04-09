@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from scapy.all import (
-    AsyncSniffer, Ether, IP, IPv6, ARP, DNS, UDP, TCP,
+    AsyncSniffer, Ether, IP, IPv6, ARP, DNS, UDP, TCP, ICMP,
     get_if_list, get_if_hwaddr, send, sr, wrpcap, sniff
 )
 
@@ -325,7 +325,7 @@ class PacketSnifferApp:
             self.sniffer.stop()
         self.sniffing = False
         self.start_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
         # Stop ARP spoofing if running.
         if self.mode.get() == "k9" and self.arp_thread:
             self.arp_stop_event.set()
@@ -445,6 +445,8 @@ class PacketSnifferApp:
             info['dst_ip'] = packet[IP].dst
             if DNS in packet:
                 info['protocol'] = "DNS"
+            elif ICMP in packet:
+                info['protocol'] = "ICMP"
             elif UDP in packet:
                 sport, dport = packet[UDP].sport, packet[UDP].dport
                 if sport == 5353 or dport == 5353:
@@ -467,6 +469,9 @@ class PacketSnifferApp:
             info['dst_ip'] = "N/A"
         info['summary'] = packet.summary()
         return info
+
+    def export_csv(self):
+        print("Exporting packets to CSV...")
 
 
 ###############################################################################
