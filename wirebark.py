@@ -7,13 +7,14 @@ import socket
 import struct
 import csv
 import argparse
+import platform
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from scapy.all import (
     AsyncSniffer, Ether, IP, IPv6, ARP, DNS, UDP, TCP, ICMP,
-    get_if_list, get_if_hwaddr, send, sr, wrpcap, sniff
+    get_if_list, get_if_hwaddr, send, sr, wrpcap
 )
 
 # Try to import netifaces for a robust gateway lookup.
@@ -23,12 +24,28 @@ try:
 except ImportError:
     have_netifaces = False
 
-# Mapping for IP protocol numbers to names
+# Mapping for IP protocol numbers to names.
 ip_protocol_map = {
     1:  "ICMP",
     6:  "TCP",
     17: "UDP"
 }
+
+
+###############################################################################
+# Helper Functions
+###############################################################################
+def enable_ip_forwarding():
+    """Enable IP forwarding on Linux systems to help with packet forwarding."""
+    if platform.system() == "Linux":
+        try:
+            with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
+                f.write("1")
+            print("IP forwarding enabled.")
+        except Exception as e:
+            print(f"Failed to enable IP forwarding: {e}")
+    else:
+        print("IP forwarding must be enabled manually on non-Linux systems.")
 
 
 ###############################################################################
@@ -38,9 +55,7 @@ class PacketSnifferApp:
     def __init__(self, root, cli_options):
         self.root = root
         self.root.title("Wirebark Packet Sniffer")
-
-        # Storage for captured packets: (packet info, raw scapy packet)
-        self.captured_packets = []
+        self.captured_packets = []  # List of tuples: (packet info, raw scapy packet)
         self.current_filter = ""
         self.sniffing = False
         self.sniffer = None
@@ -49,7 +64,7 @@ class PacketSnifferApp:
         self.arp_thread = None
         self.arp_stop_event = threading.Event()
 
-        # Mode: "puppy" or "k9"
+        # Mode: "puppy" (local filtering) or "k9" (active ARP spoofing)
         self.mode = tk.StringVar(value="puppy")
         self.selected_interface = tk.StringVar(value=cli_options.interface if cli_options.interface else "")
         self.filter_entry_text = tk.StringVar()
@@ -64,13 +79,16 @@ class PacketSnifferApp:
         self.log_file = None  # File handle for auto logging
         self.csv_writer = None
 
+        # Theme mode (Light/Dark)
+        self.theme_var = tk.StringVar(value="Light")
+
         # Check for permissions.
         if os.geteuid() != 0:
             messagebox.showwarning("Permission Required",
                                    "Run this app as root/admin to sniff packets and perform ARP spoofing.")
 
         self.create_widgets()
-        # If the CLI preset an interface, update the gateway field.
+        # If a network interface was preset, update the gateway field.
         if self.selected_interface.get():
             self.interface_combo.set(self.selected_interface.get())
             self.interface_changed(None)
@@ -79,9 +97,13 @@ class PacketSnifferApp:
         control_frame = tk.Frame(self.root)
         control_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        # Interface selection
-        tk.Label(control_frame, text="Interface:").pack(side=tk.LEFT, padx=(0, 5))
-        self.interface_combo = ttk.Combobox(control_frame, textvariable=self.selected_interface, width=12)
+        # Split the top controls into two rows.
+        # ROW 1: Interface, Mode (with K9 fields), Theme, Start/Stop Buttons.
+        row1 = tk.Frame(control_frame)
+        row1.pack(fill=tk.X, pady=(0, 5))
+        # Interface selection.
+        tk.Label(row1, text="Interface:").pack(side=tk.LEFT, padx=(0, 5))
+        self.interface_combo = ttk.Combobox(row1, textvariable=self.selected_interface, width=12)
         interfaces = get_if_list()
         self.interface_combo['values'] = interfaces
         if not self.selected_interface.get() and interfaces:
@@ -89,13 +111,15 @@ class PacketSnifferApp:
         self.interface_combo.pack(side=tk.LEFT, padx=5)
         self.interface_combo.bind("<<ComboboxSelected>>", self.interface_changed)
 
-        # Mode selection radio buttons
-        tk.Label(control_frame, text="Mode:").pack(side=tk.LEFT, padx=(10, 5))
-        tk.Radiobutton(control_frame, text="Puppy", variable=self.mode, value="puppy", command=self.update_mode_ui).pack(side=tk.LEFT)
-        tk.Radiobutton(control_frame, text="K9", variable=self.mode, value="k9", command=self.update_mode_ui).pack(side=tk.LEFT)
+        # Mode selection radio buttons.
+        tk.Label(row1, text="Mode:").pack(side=tk.LEFT, padx=(10, 5))
+        tk.Radiobutton(row1, text="Puppy", variable=self.mode, value="puppy",
+                       command=self.update_mode_ui).pack(side=tk.LEFT)
+        tk.Radiobutton(row1, text="K9", variable=self.mode, value="k9",
+                       command=self.update_mode_ui).pack(side=tk.LEFT)
 
-        # K9 Mode fields (only shown in K9 mode)
-        self.k9_frame = tk.Frame(control_frame)
+        # K9 Mode fields.
+        self.k9_frame = tk.Frame(row1)
         tk.Label(self.k9_frame, text="Gateway IP:").pack(side=tk.LEFT, padx=(10, 5))
         self.gateway_entry = tk.Entry(self.k9_frame, textvariable=self.gateway_ip, width=12)
         self.gateway_entry.pack(side=tk.LEFT, padx=5)
@@ -105,33 +129,38 @@ class PacketSnifferApp:
         if self.mode.get() == "k9":
             self.k9_frame.pack(side=tk.LEFT)
 
-        # Start and Stop buttons
-        self.start_button = tk.Button(control_frame, text="Start Sniffing", command=self.start_sniffing)
-        self.start_button.pack(side=tk.LEFT, padx=5)
-        self.stop_button = tk.Button(control_frame, text="Stop Sniffing", command=self.stop_sniffing, state=tk.DISABLED)
+        # Theme dropdown.
+        tk.Label(row1, text="Theme:").pack(side=tk.LEFT, padx=(10, 5))
+        theme_menu = tk.OptionMenu(row1, self.theme_var, "Light", "Dark", command=self.change_theme)
+        theme_menu.pack(side=tk.LEFT, padx=5)
+
+        # Start and Stop buttons.
+        self.start_button = tk.Button(row1, text="Start Sniffing", command=self.start_sniffing)
+        self.start_button.pack(side=tk.LEFT, padx=(10, 5))
+        self.stop_button = tk.Button(row1, text="Stop Sniffing", command=self.stop_sniffing, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
 
-        # Filter field and button
-        self.filter_entry = tk.Entry(control_frame, textvariable=self.filter_entry_text)
+        # ROW 2: Filter, Go to Last, Logging, and Export controls.
+        row2 = tk.Frame(control_frame)
+        row2.pack(fill=tk.X)
+        # Filter field and button.
+        self.filter_entry = tk.Entry(row2, textvariable=self.filter_entry_text)
         self.filter_entry.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
         self.filter_entry.bind("<Return>", lambda e: self.apply_filter())
-        self.filter_button = tk.Button(control_frame, text="Apply Filter", command=self.apply_filter)
+        self.filter_button = tk.Button(row2, text="Apply Filter", command=self.apply_filter)
         self.filter_button.pack(side=tk.LEFT, padx=5)
-
-        # Go to Last button
-        self.go_last_button = tk.Button(control_frame, text="Go to Last", command=self.go_to_last)
+        # Go to Last button.
+        self.go_last_button = tk.Button(row2, text="Go to Last", command=self.go_to_last)
         self.go_last_button.pack(side=tk.LEFT, padx=5)
-
-        # Auto Logging controls
-        tk.Checkbutton(control_frame, text="Auto Log", variable=self.logging_enabled).pack(side=tk.LEFT, padx=(10, 5))
-        self.log_button = tk.Button(control_frame, text="Select Log File", command=self.select_log_file)
+        # Auto Logging controls.
+        tk.Checkbutton(row2, text="Auto Log", variable=self.logging_enabled).pack(side=tk.LEFT, padx=(10, 5))
+        self.log_button = tk.Button(row2, text="Select Log File", command=self.select_log_file)
         self.log_button.pack(side=tk.LEFT, padx=5)
-
-        # Export CSV button (manual export)
-        self.export_button = tk.Button(control_frame, text="Export CSV", command=self.export_csv)
+        # Export CSV button.
+        self.export_button = tk.Button(row2, text="Export CSV", command=self.export_csv)
         self.export_button.pack(side=tk.LEFT, padx=5)
 
-        # Treeview for packet display
+        # Treeview for packet display.
         self.tree = ttk.Treeview(self.root, columns=("Src IP", "Dst IP", "Protocol", "Summary"), show="headings")
         self.tree.heading("Src IP", text="Source IP")
         self.tree.heading("Dst IP", text="Destination IP")
@@ -148,6 +177,31 @@ class PacketSnifferApp:
         # Shortcuts for quick focus and clearing selections.
         self.root.bind("<Control-f>", lambda e: self.filter_entry.focus_set())
         self.root.bind("<Escape>", lambda e: self.tree.selection_remove(self.tree.selection()))
+
+        # Apply initial theme.
+        self.change_theme(self.theme_var.get())
+
+    def change_theme(self, theme):
+        """Apply the chosen theme to the GUI."""
+        default_bg = self.root.cget("bg")
+        style = ttk.Style(self.root)
+        if theme == "Dark":
+            self.root.configure(bg="#2e2e2e")
+            style.configure("TFrame", background="#2e2e2e")
+            style.configure("TLabel", background="#2e2e2e", foreground="white")
+            style.configure("TButton", background="#444444", foreground="white")
+            style.configure("TCombobox", fieldbackground="#3e3e3e", background="#2e2e2e", foreground="white")
+            style.configure("TEntry", fieldbackground="#3e3e3e", foreground="white")
+            style.configure("Treeview", background="#3e3e3e", foreground="white", fieldbackground="#3e3e3e")
+        else:
+            self.root.configure(bg=default_bg)
+            style.configure("TFrame", background=default_bg)
+            style.configure("TLabel", background=default_bg, foreground="black")
+            style.configure("TButton", background=default_bg, foreground="black")
+            style.configure("TCombobox", fieldbackground="white", background=default_bg, foreground="black")
+            style.configure("TEntry", fieldbackground="white", foreground="black")
+            style.configure("Treeview", background="white", foreground="black", fieldbackground="white")
+        self.root.update_idletasks()
 
     def interface_changed(self, event):
         """When an interface is selected, update the Gateway field for K9 mode."""
@@ -169,7 +223,7 @@ class PacketSnifferApp:
                 pass
         try:
             with open("/proc/net/route") as f:
-                next(f)  # Skip header
+                next(f)  # Skip header.
                 for line in f:
                     fields = line.strip().split()
                     if fields[0] != iface:
@@ -285,8 +339,9 @@ class PacketSnifferApp:
                 self.log_file = None
                 self.csv_writer = None
 
-        # In K9 mode, start ARP spoofing.
+        # In K9 mode, start ARP spoofing and enable IP forwarding.
         if self.mode.get() == "k9":
+            enable_ip_forwarding()
             gateway = self.gateway_ip.get().strip()
             victim = self.victim_ip.get().strip()
             if not gateway or not victim:
@@ -338,8 +393,8 @@ class PacketSnifferApp:
 
     def arp_spoof(self, gateway_ip, gateway_mac, victim_ip, victim_mac, our_mac):
         """
-        ARP spoofing thread.
-          - In standard K9 mode, spoof victim and gateway.
+        ARP spoofing thread:
+          - In standard K9 mode, spoof both victim and gateway.
           - If victim_ip is "0.0.0.0", send broadcast ARP replies.
         """
         while not self.arp_stop_event.is_set():
@@ -355,7 +410,6 @@ class PacketSnifferApp:
 
     def handle_new_packet(self, packet):
         info = self.get_packet_info(packet)
-
         # In Puppy mode, show only packets involving the local machine.
         if self.mode.get() == "puppy":
             local_ip = self.get_local_ip(self.selected_interface.get())
@@ -383,7 +437,8 @@ class PacketSnifferApp:
                         info.get('protocol', 'Unknown'),
                         info.get('summary', '')
                     ])
-                    self.log_file.flush()
+                    if self.log_file:
+                        self.log_file.flush()
                 except Exception as e:
                     print(f"Error logging packet: {e}")
 
@@ -472,7 +527,8 @@ class PacketSnifferApp:
 
     def export_csv(self):
         print("Exporting packets to CSV...")
-
+        # CSV export functionality can be added here.
+        # Currently, auto logging writes packets to the log file in real time.
 
 ###############################################################################
 # CLI MODE CODE
@@ -507,7 +563,6 @@ def run_cli(args):
     wrpcap(output, packets)
     if not args.quiet:
         print(f"\nCapture saved to: {output}")
-
 
 ###############################################################################
 # MAIN: Parse arguments and select mode
