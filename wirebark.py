@@ -525,10 +525,40 @@ class PacketSnifferApp:
         info['summary'] = packet.summary()
         return info
 
-    def export_csv(self):
-        print("Exporting packets to CSV...")
-        # CSV export functionality can be added here.
-        # Currently, auto logging writes packets to the log file in real time.
+   def export_csv(self):
+    """Export captured packets to a CSV file."""
+   """if not self.captured_packets:
+        messagebox.showinfo("No Data", "No packets to export.")
+        return
+
+    file_path = filedialog.asksaveasfilename(
+        defaultextension=".csv",
+        filetypes=[("CSV files", "*.csv")],
+        title="Save Captured Packets"
+    )
+
+    if not file_path:
+        # User cancelled the file dialog
+        return
+
+    try:
+        with open(file_path, 'w', newline='') as csvfile:
+            csv_writer = csv.writer(csvfile)
+            # Write the header
+            csv_writer.writerow(["Source MAC", "Destination MAC", "Source IP", "Destination IP", "Protocol", "Summary"])
+            # Write packet data
+            for info, _ in self.captured_packets:
+                csv_writer.writerow([
+                    info.get('src_mac', 'N/A'),
+                    info.get('dst_mac', 'N/A'),
+                    info.get('src_ip', 'N/A'),
+                    info.get('dst_ip', 'N/A'),
+                    info.get('protocol', 'Unknown'),
+                    info.get('summary', '')
+                ])
+        messagebox.showinfo("Export Complete", f"Captured packets exported to:\n{file_path}")
+    except Exception as e:
+        messagebox.showerror("Export Error", f"An error occurred while exporting:\n{e}")"""
 
 ###############################################################################
 # CLI MODE CODE
