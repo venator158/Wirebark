@@ -36,7 +36,7 @@ Wirebark is a lightweight network analysis tool built with Python. It features A
 Install dependencies via pip:
 
 ```bash
-pip install scapy
+pip install scapy argparse netifaces
 ```
 
 > Tkinter comes pre-installed with most Python distributions. If not, install via your OS package manager.
