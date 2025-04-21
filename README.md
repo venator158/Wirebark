@@ -57,7 +57,23 @@ sudo python3 wirebark.py
 2. (Optional) Enter a target IP for ARP spoofing, or leave blank to spoof the entire network.
 3. Start sniffing and view live traffic in the GUI.
 4. Use filter input to isolate specific packet types (e.g., `TCP`, `UDP`, `ARP`).
-
+5. For easy use and access from terminal, pack using pyinstaller and move the executable to /usr/local/bin
+```bash
+pip install pyinstaller
+```
+```bash
+pyinstaller --onefile --distpath /tmp/dist --workpath /tmp/build --name wirebark wirebark.py
+```
+```bash
+sudo mv /tmp/dist/wirebark /usr/local/bin/
+```
+```bash
+sudo chmod +x /usr/local/bin/wirebark
+```
+to run the application in GUI mode use
+```bash
+sudo wirebark
+```
 ---
 
 ## ⚠️ Legal Notice
