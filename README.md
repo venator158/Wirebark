@@ -36,6 +36,8 @@ Wirebark is a lightweight network analysis tool built with Python. It features A
 Install dependencies via pip:
 
 ```bash
+git clone sudo python3 wirebark.py
+cd Wirebark
 pip install scapy argparse netifaces
 ```
 
